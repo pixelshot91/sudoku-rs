@@ -1,16 +1,41 @@
 use strum::{EnumIter, IntoEnumIterator};
 
 #[derive(Debug, Clone, Copy, EnumIter, PartialEq, Eq)]
+#[repr(u8)]
 enum Digit {
-    One,
-    Two,
-    Three,
-    Four,
-    Five,
-    Six,
-    Seven,
-    Height,
-    Nine,
+    One = 0,
+    Two = 1,
+    Three = 2,
+    Four = 3,
+    Five = 4,
+    Six = 5,
+    Seven = 6,
+    Height = 7,
+    Nine = 8,
+}
+
+trait Next: Sized {
+    fn next(&self) -> Self;
+}
+impl Next for Option<Digit> {
+    fn next(&self) -> Self {
+        match self {
+            None => Some(Digit::One),
+
+            Some(d) => match d {
+                Digit::One => Some(Digit::Two),
+                Digit::Two => Some(Digit::Three),
+                Digit::Three => Some(Digit::Four),
+                Digit::Four => Some(Digit::Five),
+                Digit::Five => Some(Digit::Six),
+                Digit::Six => Some(Digit::Seven),
+                Digit::Seven => Some(Digit::Height),
+                Digit::Height => Some(Digit::Nine),
+                // The digit was Nine, so there is no possible value
+                Digit::Nine => None,
+            },
+        }
+    }
 }
 
 const BLOCK_SIDE: usize = 3;
@@ -24,6 +49,7 @@ struct Cell {
 
 /// Guarantees that no digit are in direct contradiction
 /// The grid maybe unsolvable though
+#[derive(Clone)]
 struct Grid {
     data: [Cell; NB_CELL as usize],
 }
@@ -36,8 +62,8 @@ impl Grid {
     }
 
     /// [try_solve] take a [Grid] as mutable reference for performance reason, but guarantees that self has the same value after this function returns
-    fn try_solve(&mut self) -> GridSolver {
-        GridSolver { initial_grid: self }
+    fn try_solve<'a>(&'a self) -> GridSolver<'a> {
+        GridSolver::from_grid(&self)
     }
 
     fn can_accept_digit_at_pos(&self, d: Digit, pos: usize) -> bool {
@@ -79,13 +105,13 @@ impl Grid {
 /// All Cell in [grid] strictly before the cell at index [fill_until] are filled
 /// Cell after fill_until may or may not be filled
 /// All cells are guaranteed to not contradict with each other, per [Grid] guarantee
-struct PartialySolvedGrid<'a> {
-    grid: &'a mut Grid,
+struct PartialySolvedGrid {
+    grid: Grid,
     fill_until: usize,
 }
 
-impl<'a> PartialySolvedGrid<'a> {
-    fn try_fill_next_cell(&'a mut self) -> bool {
+impl PartialySolvedGrid {
+    fn try_fill_next_cell(&mut self) -> bool {
         match self.grid.data[self.fill_until].value {
             Some(_) => {
                 // a digit is already here
@@ -104,22 +130,81 @@ impl<'a> PartialySolvedGrid<'a> {
             }
         }
     }
+
+    fn try_increment_cell_at_index(&mut self, cell_index: usize) -> bool {
+        let original_digit = self.grid.data[cell_index].value.take();
+        let d = original_digit;
+        while let Some(d) = d.next() {
+            if self.grid.can_accept_digit_at_pos(d, self.fill_until) {
+                self.grid.data[cell_index].value = Some(d);
+                return true;
+            }
+        }
+        self.fill_until -= 1;
+        false
+    }
 }
 
 struct GridSolver<'a> {
-    initial_grid: &'a mut Grid,
+    initial_grid: &'a Grid,
+    psg: PartialySolvedGrid,
+}
+
+impl<'a> GridSolver<'a> {
+    fn from_grid(grid: &'a Grid) -> GridSolver<'a> {
+        GridSolver {
+            initial_grid: grid,
+            psg: PartialySolvedGrid {
+                grid: grid.clone(),
+                fill_until: 0,
+            },
+        }
+    }
 }
 
 impl<'a> Iterator for GridSolver<'a> {
     type Item = SolvedGrid;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut psg = PartialySolvedGrid {
-            grid: self.initial_grid,
-            fill_until: 0,
-        };
+        fn guessed_cells(
+            self_psg_fill_until: &usize,
+            self_initial_grid_data: &[Cell; NB_CELL],
+        ) -> Vec<usize> {
+            (*self_psg_fill_until..0)
+                .rev()
+                // Only keep the cell which were empty in the initial grid
+                .filter(|cell_index| self_initial_grid_data[*cell_index].value.is_none())
+                .collect::<Vec<usize>>()
+        }
 
-        psg.try_fill_next_cell();
+        // The only way out of this loop is to either:
+        // - return a possible solution
+        // - exhaust all possible solution, then return
+        loop {
+            if self.psg.fill_until == NB_CELL {
+                return Some(SolvedGrid::from_psg(&self.psg));
+            }
+
+            match self.psg.try_fill_next_cell() {
+                // The cell has been filled, continue this way
+                true => {}
+                // No cell could have been filled: we are at a dead-end: backtrack
+                false => {
+                    for guessed_cell in guessed_cells(&self.psg.fill_until, &self.initial_grid.data)
+                    {
+                        if self.psg.try_increment_cell_at_index(guessed_cell) {
+                            // the last guessed cell has been incremented,
+                            // TODO: break out of the little loop, but stay inside the big loop
+                            break;
+                        }
+                    }
+                    // Could not increment any of the already filled cells
+                    // We already know that the next cannot be filled either
+                    // There is no more solution
+                    return None;
+                }
+            }
+        }
 
         // let data = &mut self.initial_grid.data;
 
@@ -167,7 +252,7 @@ struct SolvedGrid {
 }
 
 impl SolvedGrid {
-    fn from_psg(psg: PartialySolvedGrid) -> SolvedGrid {
+    fn from_psg(psg: &PartialySolvedGrid) -> SolvedGrid {
         assert_eq!(psg.fill_until, NB_CELL);
         SolvedGrid {
             data: psg.grid.data.map(|maybe_digit| maybe_digit.value.expect("Because fill_until == NB_CELL, and data.len() == fill_until, digit should always be Some"))
