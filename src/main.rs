@@ -1,5 +1,7 @@
 use core::str;
+use std::io::Read;
 
+use itertools::Itertools;
 use strum::{EnumIter, IntoEnumIterator};
 
 #[derive(Debug, Clone, Copy, EnumIter, PartialEq, Eq)]
@@ -27,26 +29,17 @@ impl Digit {
 }
 
 trait Next: Sized {
-    fn next(&self) -> Self;
+    fn get_all_next(&self) -> Vec<Digit>;
 }
 impl Next for Cell {
-    fn next(&self) -> Self {
+    fn get_all_next(&self) -> Vec<Digit> {
         match self {
-            None => Some(Digit::One),
+            None => Digit::iter().collect_vec(),
 
-            Some(d) => match d {
-                Digit::One => Some(Digit::Two),
-                Digit::Two => Some(Digit::Three),
-                Digit::Three => Some(Digit::Four),
-                Digit::Four => None,
-                // Digit::Four => Some(Digit::Five),
-                // Digit::Five => Some(Digit::Six),
-                // Digit::Six => Some(Digit::Seven),
-                // Digit::Seven => Some(Digit::Height),
-                // Digit::Height => Some(Digit::Nine),
-                // // The digit was Nine, so there is no possible value
-                // Digit::Nine => None,
-            },
+            Some(base_digit) => Digit::iter()
+                .skip_while(|d| d != base_digit)
+                .skip(1)
+                .collect_vec(),
         }
     }
 }
@@ -110,14 +103,13 @@ impl Grid {
     }
 }
 
+fn times(n: usize) -> impl Iterator {
+    std::iter::repeat(()).take(n)
+}
 impl std::fmt::Display for Grid {
     #[allow(unstable_name_collisions)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use itertools::Itertools;
-
-        fn times(n: usize) -> impl Iterator {
-            std::iter::repeat(()).take(n)
-        }
 
         const TOP_LEFT_CORNER: char = '┌';
         const TOP_RIGHT_CORNER: char = '┐';
@@ -232,6 +224,9 @@ struct PartialySolvedGrid {
 
 impl PartialySolvedGrid {
     fn try_fill_next_cell(&mut self) -> bool {
+        if self.fill_until == self.grid.data.len() {
+            return false;
+        }
         match self.grid.data[self.fill_until] {
             Some(_) => {
                 // a digit is already here
@@ -241,6 +236,7 @@ impl PartialySolvedGrid {
             None => {
                 for d in Digit::iter() {
                     if self.grid.can_accept_digit_at_pos(d, self.fill_until) {
+                        self.grid.data[self.fill_until] = Some(d);
                         self.fill_until += 1;
                         return true;
                     }
@@ -254,14 +250,20 @@ impl PartialySolvedGrid {
     fn try_increment_cell_at_index(&mut self, cell_index: usize) -> bool {
         let original_digit = self.grid.data[cell_index].take();
         let d = original_digit;
-        while let Some(d) = d.next() {
-            if self.grid.can_accept_digit_at_pos(d, self.fill_until) {
+        for d in d.get_all_next() {
+            if self.grid.can_accept_digit_at_pos(d, cell_index) {
                 self.grid.data[cell_index] = Some(d);
                 return true;
             }
         }
         self.fill_until -= 1;
         false
+    }
+}
+
+impl std::fmt::Display for PartialySolvedGrid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.grid.fmt(f)
     }
 }
 
@@ -296,7 +298,7 @@ impl<'a> GridSolver<'a> {
                     self_psg_fill_until: &usize,
                     self_initial_grid_data: &[Cell; NB_CELL],
                 ) -> Vec<usize> {
-                    (*self_psg_fill_until..0)
+                    (0..*self_psg_fill_until)
                         .rev()
                         // Only keep the cell which were empty in the initial grid
                         .filter(|cell_index| self_initial_grid_data[*cell_index].is_none())
@@ -375,9 +377,16 @@ impl std::fmt::Display for SolvedGrid {
 }
 
 fn main() {
-    let mut grid = Grid::empty();
+    let grid = Grid::empty();
+    let mut solver = grid.try_solve();
 
-    print!("{}", grid);
+    loop {
+        assert!(solver.make_progress());
+
+        println!("{}", solver.psg);
+
+        std::io::stdin().read(&mut [0u8]).unwrap();
+    }
 
     return;
 
@@ -388,7 +397,41 @@ fn main() {
 
 #[cfg(test)]
 mod test {
-    use crate::Grid;
+    use std::f32::DIGITS;
+
+    use crate::{times, Digit, Grid, Next, NB_CELL};
+
+    #[test]
+    fn digit_next() {
+        let d = Some(Digit::Two);
+
+        assert_eq!(Some(Digit::Two).get_all_next().len(), 2);
+        assert_eq!(None.get_all_next().len(), 4);
+    }
+
+    #[test]
+    fn make_progress_on_full_grid() {
+        let grid = Grid::empty();
+        let mut solver = grid.try_solve();
+
+        times(NB_CELL).for_each(|_| assert!(solver.make_progress()));
+
+        assert_eq!(solver.psg.fill_until, NB_CELL);
+        println!("{}", solver.psg);
+
+        assert!(solver.make_progress());
+
+        println!("{}", solver.psg);
+    }
+
+    #[test]
+    fn make_progress_on_empty_grid() {
+        let grid = Grid::empty();
+        let mut solver = grid.try_solve();
+        assert!(solver.make_progress());
+
+        println!("{}", solver.psg);
+    }
 
     #[test]
     fn display_empty_grid() {
