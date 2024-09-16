@@ -7,10 +7,10 @@ use strum::{EnumIter, IntoEnumIterator};
 #[derive(Debug, Clone, Copy, EnumIter, PartialEq, Eq)]
 #[repr(u8)]
 enum Digit {
-    One = 0,
-    Two = 1,
-    Three = 2,
-    Four = 3,
+    One = 1,
+    Two,
+    Three,
+    Four,
     // Five = 4,
     // Six = 5,
     // Seven = 6,
@@ -52,7 +52,7 @@ type Cell = Option<Digit>;
 
 /// Guarantees that no digit are in direct contradiction
 /// The grid maybe unsolvable though
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Grid {
     data: [Cell; NB_CELL],
 }
@@ -62,6 +62,24 @@ impl Grid {
         Grid {
             data: [None; NB_CELL],
         }
+    }
+
+    /// Useful for test to visualize the grid being created
+    /// 0 stand for empty cell
+    /// Other digit stand for themselves
+    /// PANIC if an element is not in the range 0..=NB_CELL
+    #[cfg(test)]
+    fn from_u8s(array: [u8; NB_CELL]) -> Grid {
+        let data = array.map(|c| {
+            let mut i = [None].into_iter().chain(Digit::iter().map(|d| Some(d)));
+            i.nth(c.into()).unwrap()
+        });
+        Grid { data }
+    }
+
+    #[cfg(test)]
+    fn to_u8s(&self) -> [u8; NB_CELL] {
+        self.data.map(|c| c.map_or(0, |d| d as u8))
     }
 
     /// [try_solve] take a [Grid] as mutable reference for performance reason, but guarantees that self has the same value after this function returns
@@ -331,7 +349,9 @@ impl<'a> Iterator for GridSolver<'a> {
         // - exhaust all possible solution, then return
         loop {
             if self.psg.fill_until == NB_CELL {
-                return Some(SolvedGrid::from_psg(&self.psg));
+                let result = SolvedGrid::from_psg(&self.psg);
+                self.make_progress();
+                return Some(result);
             }
 
             if self.make_progress() == false {
@@ -346,6 +366,7 @@ impl<'a> Iterator for GridSolver<'a> {
 ///  - No cell contradict each other
 ///  - All cells are filled
 /// So the grid is solved
+#[derive(Debug)]
 struct SolvedGrid {
     grid: Grid,
     // data: [Digit; NB_CELL],
@@ -397,16 +418,45 @@ fn main() {
 
 #[cfg(test)]
 mod test {
-    use std::f32::DIGITS;
+    use strum::IntoEnumIterator;
 
     use crate::{times, Digit, Grid, Next, NB_CELL};
 
     #[test]
     fn digit_next() {
-        let d = Some(Digit::Two);
-
         assert_eq!(Some(Digit::Two).get_all_next().len(), 2);
         assert_eq!(None.get_all_next().len(), 4);
+    }
+
+    #[test]
+    fn iter_solutions() {
+        let grid = Grid::empty();
+        let mut solver = grid.try_solve();
+
+        let first_solution = solver.next().unwrap();
+
+        #[rustfmt::skip]
+        let expected = Grid::from_u8s([
+            1, 2, 3, 4,
+            3, 4, 1, 2,
+            2, 1, 4, 3,
+            4, 3, 2, 1
+        ]);
+        assert_eq!(first_solution.grid, expected);
+
+        let second_solution = solver.next().unwrap();
+
+        println!("{}", &second_solution);
+        dbg!(second_solution.grid.to_u8s());
+
+        #[rustfmt::skip]
+        let expected = Grid::from_u8s([
+            1, 2, 3, 4,
+            3, 4, 1, 2,
+            2, 3, 4, 1,
+            4, 1, 2, 3
+        ]);
+        assert_eq!(second_solution.grid, expected);
     }
 
     #[test]
@@ -420,6 +470,16 @@ mod test {
         println!("{}", solver.psg);
 
         assert!(solver.make_progress());
+
+        #[rustfmt::skip]
+        let expected = Grid::from_u8s([
+                1, 2, 3, 4,
+                3, 4, 1, 2,
+                2, 3, 0, 0,
+                0, 0, 0, 0,
+            ]);
+
+        assert_eq!(solver.psg.grid, expected);
 
         println!("{}", solver.psg);
     }
